@@ -18,3 +18,9 @@ just as fine). It consists of two separate parts to aid the assembly but have to
 be glued together.
 
 ![case](Case.png)
+
+
+Modules used for this project:
+* NodeMCU ESP6266
+* OLED Parent 128 x 64 Pixel
+* DHT22 AM2302 Temperature Sensor and Humidity Sensor

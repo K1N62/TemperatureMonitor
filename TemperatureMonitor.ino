@@ -11,15 +11,16 @@
 #define PinBat A0
 #define CHAR_W 6
 #define CHAR_H 10
+#define DEFAULT_FONT u8g2_font_6x10_mr
 
 // SSID and password for the wifi network
-#define ssid "xxxxxxxxx"
-#define password "xxxxxxxxx"
+#define ssid "xxxxxxx"
+#define password "xxxxxxx"
 // MQTT Broker details
-#define mqtt_server "10.0.0.1"
+#define mqtt_server "10.0.0.10"
 #define mqtt_port 1883
-#define mqtt_user "xxxxxxxxx"
-#define mqtt_password "xxxxxxxxx"
+#define mqtt_user "xxxxxxx"
+#define mqtt_password "xxxxxxx"
 
 // MQTT topic configuration
 #define client_uuid4 "f3364ef5-aa08-47ff-8a73-d2155eb60a02"
@@ -80,7 +81,7 @@ volatile bool awake = true;
 
 void u8g2_prepare()
 {
-  u8g2.setFont(u8g2_font_6x10_mr);
+  u8g2.setFont(DEFAULT_FONT);
   u8g2.setFontRefHeightExtendedText();
   u8g2.setFontMode(1);
   u8g2.setDrawColor(2);
@@ -92,17 +93,26 @@ void u8g2_prepare()
 // Helper function to print text
 void writeText(uint8_t x, uint8_t row, String text)
 {
+  //writeText(x, row, text.c_str());
   u8g2.drawStr(x, row * CHAR_H + row_offset, text.c_str());
+}
+
+// Helper function to print text
+void writeLargeText(uint8_t x, uint8_t row, String text)
+{
+  // https://github.com/olikraus/u8g2/wiki/fntgrpx11
+  u8g2.setFont(u8g2_font_10x20_tf);
+  u8g2.drawStr(x, row * CHAR_H + row_offset, text.c_str());
+  u8g2.setFont(DEFAULT_FONT);
 }
 
 // Helper function to print UTF-8 charactesr
 void writeUtf8(uint8_t x, uint8_t row, String text)
 {
+  // https://github.com/olikraus/u8g2/wiki/fntgrpunifont
   u8g2.setFont(u8g2_font_unifont_t_symbols);
-  char buf[129] = {0};
-  text.toCharArray(buf, 128);
-  u8g2.drawUTF8(x, row * (CHAR_H - 1) + row_offset, buf);
-  u8g2.setFont(u8g2_font_6x10_mr);
+  writeText(x, row, text);
+  u8g2.setFont(DEFAULT_FONT);
 }
 
 // Helper function to clear the screen buffer
@@ -136,12 +146,9 @@ void drawScreen()
 // Print the temperature and humidity
 void drawTemp()
 {
-  String st = String("    Temp: ") + t;
-  String sh = String("Humidity: ") + h + " %";
-  writeText(0, 2, st);
-  writeUtf8(st.length() * CHAR_W - 1, 2, String("°"));
-  writeText((st.length() + 1) * CHAR_W, 2, "c");
-  writeText(0, 3, sh);
+  char line[30];
+  sprintf(line, "%.1f%cc %.1f%%", t, 0xB0, h);
+  writeLargeText(0, 2, line);
 }
 
 // Print the wifi status
@@ -169,9 +176,14 @@ void drawWifi()
 // Print the wifi status bar
 void drawStatusBar()
 {
-  String rssi = WiFi.RSSI() + String("dBm");
-  writeText(0, 0, String("Bat: ") + v);
-  writeText(128 - rssi.length() * CHAR_W, 0, rssi);
+  if (WiFi.RSSI()) {
+    char rssi[15];
+    sprintf(rssi, "%d dBm", WiFi.RSSI());
+    writeText(128 - strlen(rssi) * CHAR_W, 0, rssi);
+  }
+  if (v > .2) {
+    writeText(0, 0, String("Bat: ") + v);
+  }
 }
 
 // Print the welcome text, simple splash screen stating the app name
@@ -347,8 +359,8 @@ void handleMQTT()
   mqttClient.loop();
 
   // Check if values have changed from previous update
-  // Threshold is .25 degrees or .25% humidity from previous value
-  if (abs(pt - t) >= .25)
+  // Threshold is .1 degrees or .1% humidity from previous value
+  if (abs(pt - t) >= .1)
   {
     pt = t;
     if (mqttClient.publish(temp_topic, String(t).c_str(), true))
@@ -356,7 +368,7 @@ void handleMQTT()
       Serial.println("Published temperature topic");
     }
   }
-  if (abs(ph - h) >= .25)
+  if (abs(ph - h) >= .1)
   {
     ph = h;
     if (mqttClient.publish(humidity_topic, String(h).c_str(), true))
@@ -369,8 +381,7 @@ void handleMQTT()
 // Interupt handler when pushing the wakeup button
 ICACHE_RAM_ATTR void handleButton()
 {
-  //WiFi.forceSleepWake();  // Not used atm
-  // This is not ideal as calling millis in the interupt handler causes
+  // This is not ideal, calling millis in the interupt handler causes
   // longer delays from the loop
   t_awake = millis();
   awake = true;
@@ -394,6 +405,7 @@ void setup()
 
   // Setup the serial interface
   Serial.begin(115200);
+  Serial.println("Starting up");
 
   // Gimmick
   printWelcome();
@@ -403,9 +415,10 @@ void setup()
   WiFi.persistent(false);
   WiFi.setSleepMode(WIFI_LIGHT_SLEEP);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
 
   // Wait for the Wi-Fi to connect
+  Serial.println("Connecting sensor to grid...");
+  WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(250);
@@ -427,6 +440,11 @@ void setup()
 // Main loop
 void loop()
 {
+  // Make sure millis has no overflow
+  if (last_dht_update > millis()) {
+    last_dht_update = millis();
+  }
+  
   // Check battery
   v = analogRead(PinBat) / 1023.0 * 4.55;
 
@@ -437,7 +455,7 @@ void loop()
   }
 
   // Update readings only each 5 seconds
-  if (abs(millis() - last_dht_update) > 5000)
+  if (millis() - last_dht_update > 5000)
   {
     last_dht_update = millis();
     // Get new readings
@@ -463,7 +481,7 @@ void loop()
     drawScreen();
 
     // If the screen has been on for 15 seconds, turn it off
-    if (abs(millis() - t_awake) > 15000)
+    if (millis() - t_awake > 15000)
     {
       awake = false;
       u8g2.setPowerSave(!awake);
